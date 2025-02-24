@@ -2,7 +2,7 @@ import ast
 import uuid
 import sys
 import re
-import ast
+import json
 from io import StringIO
 from graphviz import Digraph
 from typing import Optional, Dict
@@ -335,83 +335,127 @@ NODE_EXPLANATIONS = {
     'Attribute': 'Attribute access (obj.attr)',
 }
 
-class ASTPrettifier:
-    def __init__(self, show_explanations: bool = False, use_html: bool = False):
-        self.show_explanations = show_explanations
-        self.use_html = use_html
-        self.indent_str = '  '
-    
-    def colorize(self, node_type: str, text: str) -> str:
-        """Add color to node text based on its type."""
-        category = NODE_CATEGORIES.get(node_type, 'ATTRIBUTE')
-        
-        if self.use_html:
-            color = Colors.HTML_COLORS[category]
-            return f'<span style="color: {color}">{text}</span>'
-        else:
-            color = getattr(Colors, category)
-            return f"{color}{text}{Colors.RESET}"
-    
-    def add_explanation(self, node_type: str) -> str:
-        """Add explanation for node type if enabled."""
-        if not self.show_explanations:
-            return ''
-        
-        explanation = NODE_EXPLANATIONS.get(node_type, '')
-        if not explanation:
-            return ''
-        
-        if self.use_html:
-            return f' <span style="color: #7f8c8d; font-style: italic">/* {explanation} */</span>'
-        else:
-            return f' # {explanation}'
-    
-    def prettify(self, node, level: int = 0) -> str:
-        """Create a prettified string representation of an AST."""
-        if isinstance(node, str):
-            # Handle string input (ast.dump output)
-            node = node.replace(',', ', ')
-            
-            def process_node_match(match):
-                node_type = match.group(1).split('(')[0]
-                content = match.group(1)
-                
-                if '(' in content:
-                    content = re.sub(r'([A-Za-z]+)\(([^()]*(?:\([^()]*\)[^()]*)*)\)',
-                                   process_node_match, content)
-                
-                lines = content.split(', ')
-                if len(lines) > 1:
-                    indent = self.indent_str * (level + 1)
-                    formatted = f'\n{indent}{indent.join(lines)}'
-                else:
-                    formatted = content
-                
-                colored = self.colorize(node_type, f"{node_type}({formatted})")
-                explanation = self.add_explanation(node_type)
-                return colored + explanation
-            
-            return re.sub(r'([A-Za-z]+)\(([^()]*(?:\([^()]*\)[^()]*)*)\)',
-                         process_node_match, node)
-        
-        # If input is an AST node, dump it first then prettify
-        return self.prettify(ast.dump(node, indent=None), level)
+#################
 
-def print_ast(code: str, show_explanations: bool = False, use_html: bool = False):
-    """
-    Parse and print a prettified AST for the given code.
-    
-    Args:
-        code: Python source code
-        show_explanations: Whether to show node type explanations
-        use_html: Whether to use HTML formatting (for notebooks/web)
-    """
-    tree = ast.parse(code)
-    prettifier = ASTPrettifier(show_explanations, use_html)
-    result = prettifier.prettify(tree)
-    
-    if use_html:
-        from IPython.display import HTML, display
-        display(HTML(f"<pre>{result}</pre>"))
+class Colors:
+    RESET = '\033[0m'
+    STATEMENT = '\033[92m'      # bright green
+    EXPRESSION = '\033[94m'     # bright blue
+    CONTROL_FLOW = '\033[95m'   # bright magenta
+    DEFINITION = '\033[96m'     # bright cyan
+    OPERATOR = '\033[93m'       # bright yellow
+    LITERAL = '\033[91m'        # bright red
+    ATTRIBUTE = '\033[97m'      # bright white
+
+NODE_CATEGORIES = {
+    'FunctionDef': 'DEFINITION',
+    'ClassDef': 'DEFINITION',
+    'AsyncFunctionDef': 'DEFINITION',
+    'If': 'CONTROL_FLOW',
+    'For': 'CONTROL_FLOW',
+    'While': 'CONTROL_FLOW',
+    'Call': 'EXPRESSION',
+    'Name': 'EXPRESSION',
+    'Attribute': 'EXPRESSION',
+    'Constant': 'LITERAL',
+    'Return': 'STATEMENT',
+    'Assign': 'STATEMENT',
+    'Add': 'OPERATOR',
+    'Sub': 'OPERATOR',
+    'Mult': 'OPERATOR',
+}
+
+NODE_EXPLANATIONS = {
+    'Module': 'Root node of the AST',
+    'FunctionDef': 'Function definition (def keyword)',
+    'ClassDef': 'Class definition (class keyword)',
+    'If': 'If statement for conditional execution',
+    'For': 'For loop for iteration',
+    'Call': 'Function or method call',
+    'Name': 'Variable or function name',
+    'Constant': 'Literal value (number, string, etc.)',
+    'Return': 'Return statement',
+    'Assign': 'Assignment statement (=)',
+    'arguments': 'Function arguments definition',
+    'arg': 'Single function argument',
+}
+
+def colorize(node_type: str, text: str) -> str:
+    """Add color to node text based on its type."""
+    category = NODE_CATEGORIES.get(node_type, 'ATTRIBUTE')
+    color = getattr(Colors, category)
+    return f"{color}{text}{Colors.RESET}"
+
+def get_explanation(node_type: str, show_explanations: bool) -> str:
+    """Get explanation for node type if enabled."""
+    if not show_explanations:
+        return ''
+    explanation = NODE_EXPLANATIONS.get(node_type, '')
+    if explanation:
+        return f' # {explanation}'
+    return ''
+
+def ast_to_dict(node):
+    """Convert AST node to dictionary representation."""
+    if isinstance(node, ast.AST):
+        fields = {}
+        for name, value in ast.iter_fields(node):
+            fields[name] = ast_to_dict(value)
+        return {'type': node.__class__.__name__, 'fields': fields}
+    elif isinstance(node, list):
+        return [ast_to_dict(x) for x in node]
     else:
-        print(result)
+        return node
+
+def prettify_dict(node_dict: dict, indent_level: int = 0, show_explanations: bool = False) -> str:
+    """Create a prettified string representation of the AST dictionary."""
+    indent = "  " * indent_level
+    node_type = node_dict['type']
+    fields = node_dict['fields']
+    
+    # Start the node representation
+    result = [colorize(node_type, node_type)]
+    explanation = get_explanation(node_type, show_explanations)
+    if explanation:
+        result[0] += explanation
+    
+    # If there are no fields, return just the node type
+    if not fields:
+        return "".join(result)
+    
+    result[0] += "("
+    
+    # Process fields
+    field_strs = []
+    for name, value in fields.items():
+        field_str = indent + "  "  # Extra indent for fields
+        
+        # Handle different types of values
+        if isinstance(value, dict):
+            field_str += f"{name}={prettify_dict(value, indent_level + 1, show_explanations)}"
+        elif isinstance(value, list):
+            if not value:
+                field_str += f"{name}=[]"
+            else:
+                items = [prettify_dict(item, indent_level + 2, show_explanations) 
+                        if isinstance(item, dict) 
+                        else repr(item) 
+                        for item in value]
+                field_str += f"{name}=[\n{indent}    " + f",\n{indent}    ".join(items) + "\n" + indent + "  ]"
+        else:
+            field_str += f"{name}={repr(value)}"
+        field_strs.append(field_str)
+    
+    if field_strs:
+        result.append("\n" + ",\n".join(field_strs))
+        result.append("\n" + indent + ")")
+    else:
+        result.append(")")
+    
+    return "".join(result)
+
+def print_ast(code: str, show_explanations: bool = False):
+    """Parse and print a prettified AST for the given code."""
+    tree = ast.parse(code)
+    dict_tree = ast_to_dict(tree)
+    print(prettify_dict(dict_tree, show_explanations=show_explanations))
