@@ -1,10 +1,13 @@
 import ast
-from graphviz import Digraph
 import uuid
+import sys
+import re
+import ast
+from io import StringIO
+from graphviz import Digraph
+from typing import Optional, Dict
 from IPython.display import display, Image, clear_output
 import ipywidgets as widgets
-import sys
-from io import StringIO
 
 class ASTVisualizer(ast.NodeVisitor):
     """
@@ -248,3 +251,167 @@ result = calculate_factorial(5)'''
             self.output
         ])
         display(controls)
+
+# Color codes for different node types
+class Colors:
+    # ANSI escape codes for terminal colors
+    RESET = '\033[0m'
+    BOLD = '\033[1m'
+    
+    # Node type colors
+    STATEMENT = '\033[92m'      # bright green
+    EXPRESSION = '\033[94m'     # bright blue
+    CONTROL_FLOW = '\033[95m'   # bright magenta
+    DEFINITION = '\033[96m'     # bright cyan
+    OPERATOR = '\033[93m'       # bright yellow
+    LITERAL = '\033[91m'        # bright red
+    ATTRIBUTE = '\033[97m'      # bright white
+    
+    # For HTML output
+    HTML_COLORS = {
+        'STATEMENT': '#2ecc71',    # green
+        'EXPRESSION': '#3498db',   # blue
+        'CONTROL_FLOW': '#9b59b6', # purple
+        'DEFINITION': '#00bcd4',   # cyan
+        'OPERATOR': '#f1c40f',     # yellow
+        'LITERAL': '#e74c3c',      # red
+        'ATTRIBUTE': '#ecf0f1',    # white
+    }
+
+# Node type categorization
+NODE_CATEGORIES = {
+    # Definitions
+    'FunctionDef': 'DEFINITION',
+    'ClassDef': 'DEFINITION',
+    'AsyncFunctionDef': 'DEFINITION',
+    
+    # Control Flow
+    'If': 'CONTROL_FLOW',
+    'For': 'CONTROL_FLOW',
+    'While': 'CONTROL_FLOW',
+    'Try': 'CONTROL_FLOW',
+    'Break': 'CONTROL_FLOW',
+    'Continue': 'CONTROL_FLOW',
+    
+    # Expressions
+    'Call': 'EXPRESSION',
+    'Name': 'EXPRESSION',
+    'Attribute': 'EXPRESSION',
+    'Subscript': 'EXPRESSION',
+    
+    # Statements
+    'Assign': 'STATEMENT',
+    'AugAssign': 'STATEMENT',
+    'Return': 'STATEMENT',
+    'Import': 'STATEMENT',
+    
+    # Operators
+    'Add': 'OPERATOR',
+    'Sub': 'OPERATOR',
+    'Mult': 'OPERATOR',
+    'Div': 'OPERATOR',
+    
+    # Literals
+    'Constant': 'LITERAL',
+    'List': 'LITERAL',
+    'Dict': 'LITERAL',
+    'Set': 'LITERAL',
+}
+
+# Node type explanations
+NODE_EXPLANATIONS = {
+    'FunctionDef': 'Function definition (def keyword)',
+    'ClassDef': 'Class definition (class keyword)',
+    'If': 'If statement for conditional execution',
+    'For': 'For loop for iteration',
+    'While': 'While loop for conditional iteration',
+    'Call': 'Function or method call',
+    'Name': 'Variable or function name',
+    'Constant': 'Literal value (number, string, etc.)',
+    'Return': 'Return statement',
+    'Assign': 'Assignment statement (=)',
+    'BinOp': 'Binary operation (+, -, *, etc.)',
+    'Compare': 'Comparison operation (==, !=, etc.)',
+    'Attribute': 'Attribute access (obj.attr)',
+}
+
+class ASTPrettifier:
+    def __init__(self, show_explanations: bool = False, use_html: bool = False):
+        self.show_explanations = show_explanations
+        self.use_html = use_html
+        self.indent_str = '  '
+    
+    def colorize(self, node_type: str, text: str) -> str:
+        """Add color to node text based on its type."""
+        category = NODE_CATEGORIES.get(node_type, 'ATTRIBUTE')
+        
+        if self.use_html:
+            color = Colors.HTML_COLORS[category]
+            return f'<span style="color: {color}">{text}</span>'
+        else:
+            color = getattr(Colors, category)
+            return f"{color}{text}{Colors.RESET}"
+    
+    def add_explanation(self, node_type: str) -> str:
+        """Add explanation for node type if enabled."""
+        if not self.show_explanations:
+            return ''
+        
+        explanation = NODE_EXPLANATIONS.get(node_type, '')
+        if not explanation:
+            return ''
+        
+        if self.use_html:
+            return f' <span style="color: #7f8c8d; font-style: italic">/* {explanation} */</span>'
+        else:
+            return f' # {explanation}'
+    
+    def prettify(self, node, level: int = 0) -> str:
+        """Create a prettified string representation of an AST."""
+        if isinstance(node, str):
+            # Handle string input (ast.dump output)
+            node = node.replace(',', ', ')
+            
+            def process_node_match(match):
+                node_type = match.group(1).split('(')[0]
+                content = match.group(1)
+                
+                if '(' in content:
+                    content = re.sub(r'([A-Za-z]+)\(([^()]*(?:\([^()]*\)[^()]*)*)\)',
+                                   process_node_match, content)
+                
+                lines = content.split(', ')
+                if len(lines) > 1:
+                    indent = self.indent_str * (level + 1)
+                    formatted = f'\n{indent}{indent.join(lines)}'
+                else:
+                    formatted = content
+                
+                colored = self.colorize(node_type, f"{node_type}({formatted})")
+                explanation = self.add_explanation(node_type)
+                return colored + explanation
+            
+            return re.sub(r'([A-Za-z]+)\(([^()]*(?:\([^()]*\)[^()]*)*)\)',
+                         process_node_match, node)
+        
+        # If input is an AST node, dump it first then prettify
+        return self.prettify(ast.dump(node, indent=None), level)
+
+def print_ast(code: str, show_explanations: bool = False, use_html: bool = False):
+    """
+    Parse and print a prettified AST for the given code.
+    
+    Args:
+        code: Python source code
+        show_explanations: Whether to show node type explanations
+        use_html: Whether to use HTML formatting (for notebooks/web)
+    """
+    tree = ast.parse(code)
+    prettifier = ASTPrettifier(show_explanations, use_html)
+    result = prettifier.prettify(tree)
+    
+    if use_html:
+        from IPython.display import HTML, display
+        display(HTML(f"<pre>{result}</pre>"))
+    else:
+        print(result)
