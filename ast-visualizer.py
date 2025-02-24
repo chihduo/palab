@@ -248,8 +248,3 @@ result = calculate_factorial(5)'''
             self.output
         ])
         display(controls)
-
-# Create and display the interactive visualizer
-
-visualizer = InteractiveASTVisualizer()
-visualizer.display()
